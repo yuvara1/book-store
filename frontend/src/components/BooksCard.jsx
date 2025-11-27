@@ -29,8 +29,9 @@ const BooksCard = ({ book, handleCart }) => {
   const handleBuyNow = async () => {
     if (!inStock) { alert("Out of stock"); return; }
     try {
-      const res = await axios.post("http://localhost:3000/bookstore/api/order/buy-now", { bookId: book.bookId, quantity: qty });
-      alert(res.data.message || `Purchased — total ₹${res.data.total}`);
+      const res = await axios.post("http://localhost:3000/bookstore/api/order/buy-now", { bookId: book.bookId, userId: auth.user?.userId || JSON.parse(localStorage.getItem("user"))?.userId, quantity: qty });
+      doAddToCart();
+      navigate("/cart");
     } catch (error) {
       if (error.response?.status === 401) navigate("/login");
       else alert(error.response?.data?.message || "Purchase failed");

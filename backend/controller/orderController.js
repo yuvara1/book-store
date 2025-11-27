@@ -2,38 +2,40 @@ const db = require("../config/db");
 const jwt = require("jsonwebtoken");
 require("dotenv").config();
 const { JWT_KEY } = process.env;
+const safe = require("../utils/safe");
 
 const resolveUserId = (req) => {
-  // explicit places first
-  if (req.body?.userId) return req.body.userId;
-  if (req.body?.user_id) return req.body.user_id;
-  if (req.params?.user_id) return req.params.user_id;
-  if (req.query?.userId) return req.query.userId;
-  if (req.query?.user_id) return req.query.user_id;
-  if (req.user && req.user.userId) return req.user.userId;
+  const cand =
+    req.body?.userId ??
+    req.body?.user_id ??
+    req.params?.user_id ??
+    req.query?.userId ??
+    req.query?.user_id;
 
-  // try Authorization: Bearer <token>
+  if (cand !== undefined && cand !== null) {
+    const n = safe.toPositiveInt(cand);
+    if (n) return n;
+  }
+
+  if (req.user && req.user.userId) {
+    const n = safe.toPositiveInt(req.user.userId);
+    if (n) return n;
+  }
+
   const authHeader = req.headers?.authorization || req.headers?.Authorization;
   if (authHeader && typeof authHeader === "string") {
     const parts = authHeader.split(" ");
     if (parts.length === 2 && parts[0] === "Bearer") {
       const token = parts[1];
       try {
-        if (JWT_KEY) {
-          const decoded = jwt.verify(token, JWT_KEY);
-          if (decoded && decoded.userId) return decoded.userId;
-        } else {
-          // fallback decode without verification (use only if you understand the risks)
-          const decoded = jwt.decode(token);
-          if (decoded && decoded.userId) return decoded.userId;
-        }
+        const decoded = JWT_KEY ? jwt.verify(token, JWT_KEY) : jwt.decode(token);
+        if (!decoded) return null;
+        return safe.toPositiveInt(decoded.userId || decoded.user_id || decoded.id || decoded.sub);
       } catch (err) {
-        // invalid token -> no user
         return null;
       }
     }
   }
-
   return null;
 };
 
@@ -44,11 +46,11 @@ const resolveUserId = (req) => {
  */
 exports.buyNow = async (req, res) => {
   const userId = resolveUserId(req);
-  const bookId = req.body.bookId || req.body.book_id;
+  const bookId = safe.toPositiveInt(req.body.bookId || req.body.book_id);
   const quantity = Number(req.body.quantity || 1);
 
-  if (!userId) return res.status(400).json({ success: false, message: "Missing userId 3" });
-  if (!bookId || quantity <= 0) {
+  if (!userId) return res.status(400).json({ success: false, message: "Missing userId" });
+  if (!bookId || !Number.isFinite(quantity) || quantity <= 0) {
     return res.status(400).json({ success: false, message: "Missing bookId or invalid quantity" });
   }
 
@@ -72,11 +74,12 @@ exports.buyNow = async (req, res) => {
 
     try {
       const total = Number(book.price) * quantity;
-      const [r] = await conn.query("INSERT INTO orders (user_id, total, created_at) VALUES (?, ?, NOW())", [userId, total]);
+      // insert into total_price column (schema uses total_price)
+      const [r] = await conn.query("INSERT INTO orders (user_id, total_price, created_at) VALUES (?, ?, NOW())", [userId, total]);
       const orderId = r.insertId;
       await conn.query("INSERT INTO order_items (order_id, book_id, quantity, price) VALUES (?, ?, ?, ?)", [orderId, bookId, quantity, book.price]);
     } catch (err) {
-      // ignore if orders tables don't exist
+      // ignore if order related tables don't exist
     }
 
     await conn.commit();
@@ -96,7 +99,7 @@ exports.buyNow = async (req, res) => {
  */
 exports.buyCart = async (req, res) => {
   const userId = resolveUserId(req);
-  if (!userId) return res.status(400).json({ success: false, message: "Missing userId 4" });
+  if (!userId) return res.status(400).json({ success: false, message: "Missing userId" });
 
   let conn;
   try {
@@ -132,7 +135,7 @@ exports.buyCart = async (req, res) => {
     await conn.query("DELETE FROM cart WHERE user_id = ?", [userId]);
 
     try {
-      const [r] = await conn.query("INSERT INTO orders (user_id, total, created_at) VALUES (?, ?, NOW())", [userId, total]);
+      const [r] = await conn.query("INSERT INTO orders (user_id, total_price, created_at) VALUES (?, ?, NOW())", [userId, total]);
       const orderId = r.insertId;
       for (const item of rows) {
         await conn.query("INSERT INTO order_items (order_id, book_id, quantity, price) VALUES (?, ?, ?, ?)", [orderId, item.book_id, item.quantity, item.price]);
@@ -149,5 +152,109 @@ exports.buyCart = async (req, res) => {
     return res.status(500).json({ success: false, message: "Purchase failed" });
   } finally {
     if (conn) conn.release();
+  }
+};
+
+//! ORDER HISTORY
+exports.orderHistory = async (req, res) => {
+  const userId = resolveUserId(req);
+  if (!userId) {
+    return res.status(401).json({
+      success: false,
+      message:
+        "Unauthorized: missing userId. Provide Authorization: Bearer <token> or send ?userId=<id> (or userId in request body).",
+    });
+  }
+
+  try {
+    const [orders] = await db.query(
+      `SELECT id, user_id, total_price AS total, created_at, book_ids 
+       FROM orders WHERE user_id = ? ORDER BY created_at DESC`,
+      [userId]
+    );
+
+    const enriched = [];
+    for (const o of orders) {
+      const orderId = o.id;
+      let items = [];
+
+      // 1) Try to get detailed items from order_items + books (explicit aliases)
+      try {
+        const [rows] = await db.query(
+          `SELECT
+             oi.book_id AS book_id,
+             oi.quantity AS quantity,
+             oi.price AS price,
+             b.bookId AS bookId,
+             b.title AS title,
+             b.bookImage AS bookImage,
+             b.author AS author
+           FROM order_items oi
+           LEFT JOIN books b ON oi.book_id = b.bookId
+           WHERE oi.order_id = ?`,
+          [orderId]
+        );
+
+        if (rows && rows.length) {
+          items = rows.map((r) => ({
+            book_id: r.book_id,
+            bookId: r.bookId,
+            title: r.title || null,
+            bookImage: r.bookImage || r.book_image || null,
+            author: r.author || null,
+            quantity: r.quantity || 1,
+            price: r.price || 0,
+          }));
+        }
+      } catch (err) {
+        // ignore if order_items table doesn't exist or query fails
+        items = [];
+      }
+
+      // 2) Fallback: if no order_items rows, try reading book_ids JSON column and fetch books
+      if ((!items || items.length === 0) && o.book_ids) {
+        try {
+          const parsed = typeof o.book_ids === "string" ? JSON.parse(o.book_ids) : o.book_ids;
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            // ensure numeric ids
+            const ids = safe.filterNumericIds(parsed.map((p) => (p && (p.bookId || p.id || p)) ));
+            if (ids.length > 0) {
+              const ph = safe.placeholders(ids);
+              const [bookRows] = await db.query(
+                `SELECT bookId, title, bookImage, author, price FROM books WHERE bookId IN (${ph})`,
+                ids
+              );
+              items = bookRows.map((b) => {
+                const found = parsed.find((p) => (p.bookId == b.bookId) || (p.id == b.bookId)) || {};
+                return {
+                  book_id: b.bookId,
+                  bookId: b.bookId,
+                  title: b.title,
+                  bookImage: b.bookImage || b.book_image || null,
+                  author: b.author || null,
+                  quantity: found.quantity || found.qty || 1,
+                  price: found.price || b.price || 0,
+                };
+              });
+            }
+          }
+        } catch (e) {
+          // ignore parse errors
+        }
+      }
+
+      enriched.push({
+        id: orderId,
+        total: o.total || null,
+        created_at: o.created_at || null,
+        items,
+        raw: o,
+      });
+    }
+
+    return res.status(200).json({ success: true, orders: enriched });
+  } catch (error) {
+    console.error("orderHistory error:", error);
+    return res.status(500).json({ success: false, message: "Failed to fetch order history" });
   }
 };

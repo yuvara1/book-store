@@ -1,5 +1,5 @@
-import React, { useState, useEffect } from "react";
-import { useNavigate, useLocation } from "react-router-dom";
+import React, { useState, useEffect, useCallback } from "react";
+import { useNavigate, useLocation, Link } from "react-router-dom";
 import axios from "axios";
 import { useAuth } from "../context/AuthContext";
 
@@ -21,23 +21,37 @@ const Cart = () => {
   const [savingId, setSavingId] = useState(null);
   const [buying, setBuying] = useState(false);
 
+  // reusable cart fetch (used on mount and when "cartUpdated" event fires)
+  const fetchCart = useCallback(async () => {
+    setLoading(true);
+    const userId = resolveUserId();
+    if (!userId) { setLoading(false); navigate("/login"); return; }
+    try {
+      const res = await axios.get(`http://localhost:3000/bookstore/api/cart?userId=${userId}`);
+      setCarts(res.data.rows || []);
+    } catch (err) {
+      // non-blocking: keep UI usable
+      console.error("fetchCart:", err);
+    } finally {
+      setLoading(false);
+    }
+  }, [navigate, auth.user]);
+
   useEffect(() => {
-    const fetchCart = async () => {
-      setLoading(true);
-      const userId = resolveUserId();
-      if (!userId) { setLoading(false); navigate("/login"); return; }
-      try {
-        const res = await axios.get(`http://localhost:3000/bookstore/api/cart?userId=${userId}`);
-        setCarts(res.data.rows || []);
-      } catch (err) {
-        alert(err.response?.data?.message || "Failed to fetch cart");
-      } finally {
-        setLoading(false);
-      }
-    };
+    // prefer navigation state (so reorder -> cart shows immediately),
+    // otherwise fetch server cart
     if (!location.state) fetchCart();
     else setCarts(location.state);
-  }, [location.state, navigate, auth.user]);
+  }, [location.state, fetchCart]);
+
+  // listen for global cart updates (reorder, add-to-cart elsewhere)
+  useEffect(() => {
+    const onCartUpdated = () => {
+      fetchCart();
+    };
+    window.addEventListener("cartUpdated", onCartUpdated);
+    return () => window.removeEventListener("cartUpdated", onCartUpdated);
+  }, [fetchCart]);
 
   const formatCurrency = (v) => `₹${Number(v || 0).toFixed(2)}`;
   const totalPrice = carts.reduce((sum, b) => sum + Number(b.price || 0) * Number(b.quantity || 1), 0);
@@ -120,65 +134,133 @@ const Cart = () => {
     }
   };
 
-  if (loading) return <div className="flex items-center justify-center h-64"><div>Loading…</div></div>;
+  if (loading) return <div className="flex items-center justify-center h-64"><div className="text-gray-600">Loading…</div></div>;
 
   return (
     <div className="container mx-auto px-4 py-6">
-      <h1 className="text-2xl font-semibold mb-6">Your Cart</h1>
+      <div className="flex items-center justify-between mb-6">
+        <h1 className="text-2xl font-semibold">Your Cart</h1>
+        <div className="flex items-center gap-3">
+          <button onClick={() => navigate(-1)} className="hidden md:inline-flex items-center gap-2 px-3 py-2.5 rounded-md border border-gray-200 bg-white text-sm">
+              Go back
+            </button>
+          <Link to="/home" className="px-4 py-2 border rounded-md text-sm hover:bg-gray-50">Continue shopping</Link>
+          <button
+            onClick={() => { auth?.logout?.(); navigate("/login"); }}
+            className="px-4 py-2 bg-gray-100 border rounded-md text-sm hover:bg-gray-200"
+          >
+            Sign out
+          </button>
+        </div>
+      </div>
 
       {carts.length === 0 ? (
         <div className="text-center py-12 text-gray-600">
-          <p className="mb-4">Your cart is empty.</p>
-          <button onClick={() => navigate("/dashboard")} className="px-4 py-2 bg-red-600 text-white rounded">Browse Books</button>
+          <p className="mb-4 text-lg">Your cart is empty.</p>
+          <div className="flex items-center justify-center gap-3">
+            <Link to="/home" className="px-5 py-2 bg-red-600 text-white rounded shadow hover:bg-red-700">Browse Books</Link>
+            <button onClick={() => navigate("/dashboard")} className="px-5 py-2 border rounded">Explore Picks</button>
+          </div>
         </div>
       ) : (
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           <div className="lg:col-span-2 flex flex-col gap-4">
-            {carts.map((book) => (
-              <div key={`${book.user_id}-${book.book_id}`} className="flex gap-4 p-4 bg-white rounded shadow">
-                <img src={book.bookImage || book.book_image || "https://via.placeholder.com/120x160?text=No+Image"} alt={book.title} className="w-28 h-36 object-cover rounded"/>
-                <div className="flex-1">
-                  <div className="flex justify-between">
-                    <div>
-                      <h2 className="font-semibold">{book.title}</h2>
-                      <p className="text-sm text-gray-500">by {book.author || book.username || "Unknown"}</p>
-                    </div>
-                    <button onClick={() => deleteCart(book)} className="text-red-600">Remove</button>
+            {carts.map((book) => {
+              const img = book.bookImage || book.book_image || "https://via.placeholder.com/160x220?text=No+Image";
+              const inStock = Number(book.stock || book.stock_count || 0) > 0;
+              return (
+                <div key={`${book.user_id}-${book.book_id}`} className="flex gap-4 p-4 bg-white rounded-xl shadow-sm hover:shadow-md transition">
+                  <div className="w-32 flex-shrink-0">
+                    <img src={img} alt={book.title} className="w-full h-40 object-cover rounded-lg" />
                   </div>
 
-                  <div className="mt-3 flex items-center gap-3">
-                    <div className="flex items-center border rounded px-2 py-1">
-                      <button className="px-2" onClick={() => updateQuantity(book, Math.max(1, Number(book.quantity || 1) - 1))} disabled={savingId === book.book_id}>-</button>
-                      <input
-                        className="w-12 text-center"
-                        type="number"
-                        min="1"
-                        value={book.quantity}
-                        onChange={(e) => handleQtyInput(book, e.target.value)}
-                        onBlur={() => updateQuantity(book, Number(book.quantity || 1))}
-                      />
-                      <button className="px-2" onClick={() => updateQuantity(book, Number(book.quantity || 1) + 1)} disabled={savingId === book.book_id}>+</button>
+                  <div className="flex-1">
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <h2 className="font-semibold text-lg line-clamp-2">{book.title}</h2>
+                        <p className="text-sm text-gray-500 mt-1">by {book.author || book.username || "Unknown"}</p>
+                        <div className="mt-2 text-xs text-gray-500">Book ID: {book.book_id}</div>
+                      </div>
+
+                      <div className="text-right">
+                        <div className="text-sm text-gray-500">Price</div>
+                        <div className="font-semibold text-gray-900">{formatCurrency(book.price)}</div>
+                        <div className="text-sm text-gray-500 mt-1">Subtotal: {formatCurrency((book.price || 0) * (book.quantity || 1))}</div>
+                      </div>
                     </div>
 
-                    <div className="ml-auto text-right">
-                      <div className="text-sm text-gray-600">Price</div>
-                      <div className="font-semibold">{formatCurrency(book.price)}</div>
-                      <div className="text-sm text-gray-600 mt-1">Subtotal: {formatCurrency((book.price || 0) * (book.quantity || 1))}</div>
+                    <div className="mt-4 flex items-center gap-3">
+                      <div className="flex items-center border rounded-md px-2 py-1">
+                        <button
+                          className="px-3 text-gray-600"
+                          onClick={() => updateQuantity(book, Math.max(1, Number(book.quantity || 1) - 1))}
+                          disabled={savingId === book.book_id}
+                        >
+                          −
+                        </button>
+                        <input
+                          className="w-16 text-center border-l border-r px-1 text-sm"
+                          type="number"
+                          min="1"
+                          value={book.quantity}
+                          onChange={(e) => handleQtyInput(book, e.target.value)}
+                          onBlur={() => updateQuantity(book, Number(book.quantity || 1))}
+                        />
+                        <button
+                          className="px-3 text-gray-600"
+                          onClick={() => updateQuantity(book, Number(book.quantity || 1) + 1)}
+                          disabled={savingId === book.book_id}
+                        >
+                          +
+                        </button>
+                      </div>
+
+                      <button
+                        onClick={() => deleteCart(book)}
+                        className="ml-auto inline-flex items-center gap-2 px-3 py-2 bg-red-600 text-white rounded-md hover:bg-red-700 transition text-sm"
+                      >
+                        Remove
+                      </button>
+
+                      {/* <button
+                        onClick={() => navigate(`/book/${book.book_id}`)}
+                        className="px-3 py-2 border rounded-md text-sm hover:bg-gray-50"
+                      >
+                        View
+                      </button> */}
                     </div>
                   </div>
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
 
-          <aside className="bg-white p-4 rounded shadow">
-            <h3 className="font-semibold mb-2">Order Summary</h3>
-            <div className="flex justify-between mb-1"><span>Items</span><span>{carts.length}</span></div>
-            <div className="flex justify-between mb-4"><span>Total</span><span className="font-bold">{formatCurrency(totalPrice)}</span></div>
-            <button onClick={buyAll} disabled={buying} className={`w-full py-2 ${buying ? "bg-gray-400" : "bg-green-600 hover:bg-green-700"} text-white rounded mb-2`}>
-              {buying ? "Processing…" : "Buy All"}
-            </button>
-            <button onClick={() => navigate("/dashboard")} className="w-full  py-2 border rounded">Continue Shopping</button>
+          <aside className="bg-white p-5 rounded-xl shadow-sm h-fit">
+            <h3 className="font-semibold text-lg mb-3">Order Summary</h3>
+            <div className="space-y-3">
+              <div className="flex justify-between text-sm text-gray-600">
+                <span>Items</span>
+                <span>{carts.reduce((acc, it) => acc + Number(it.quantity || 1), 0)}</span>
+              </div>
+              <div className="flex justify-between text-base font-semibold">
+                <span>Total</span>
+                <span>{formatCurrency(totalPrice)}</span>
+              </div>
+
+              <div className="mt-4">
+                <button
+                  onClick={buyAll}
+                  disabled={buying}
+                  className={`w-full py-3 rounded-md text-white font-semibold ${buying ? "bg-gray-400" : "bg-green-600 hover:bg-green-700"}`}
+                >
+                  {buying ? "Processing…" : "Checkout"}
+                </button>
+              </div>
+
+              <div className="mt-3 text-xs text-gray-500">
+                Need help? <button onClick={() => navigate("/contact")} className="text-blue-600 hover:underline">Contact support</button>
+              </div>
+            </div>
           </aside>
         </div>
       )}

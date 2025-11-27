@@ -1,9 +1,13 @@
 const { Router } = require("express");
-const { buyNow, buyCart } = require("../controller/orderController");
+const { buyNow, buyCart, orderHistory } = require("../controller/orderController");
+const auth = require("../auth/auth");
 const router = Router();
 
-// NOTE: removed protected middleware so buy APIs can be called without Authorization
+// buy endpoints (accept token or userId)
 router.post("/buy-now", buyNow);
 router.post("/buy-cart", buyCart);
+
+// protected endpoint for viewing user's order history
+router.get("/history", auth.protected, orderHistory);
 
 module.exports = router;

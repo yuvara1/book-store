@@ -6,6 +6,7 @@ import Register from "./pages/Register";
 import Home from "./pages/Home";
 import Cart from "./pages/Cart";
 import ProtectedRoute from "./routes/ProtectedRoute";
+import OrderHistory from "./pages/OrderHistory";
 
 function App() {
   return (
@@ -19,9 +20,10 @@ function App() {
           {/* protected: all app routes require login */}
           <Route element={<ProtectedRoute />}>
             <Route path="/" element={<Dashboard />} />
-            <Route path="/dashboard" element={<Dashboard />} />
+          
             <Route path="/home" element={<Home />} />
             <Route path="/cart" element={<Cart />} />
+            <Route path="/orders" element={<OrderHistory />} />
           </Route>
         </Routes>
       </BrowserRouter>

@@ -1,6 +1,9 @@
 import React, { useState } from "react";
 import axios from "axios";
+import { useNavigate } from "react-router-dom";
+
 const Register = () => {
+  const navigate = useNavigate();
   const [formData, setFormData] = useState({
     username: "",
     useremail: "",
@@ -14,7 +17,7 @@ const Register = () => {
   const handleSubmit = (e) => {
     e.preventDefault();
     axios.post("http://localhost:3000/bookstore/api/user/register", formData)
-      .then((res) => { alert("Registration Successful"); })
+      .then((res) => { alert("Registration Successful"); navigate("/login"); })
       .catch(() => { alert("Registration Failed"); });
   };
 

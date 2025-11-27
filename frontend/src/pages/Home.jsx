@@ -86,7 +86,7 @@ const Home = () => {
         <Header cart={cart} setSerachTitle={setSerachTitle} setSearchAuthor={setSearchAuthor} />
       </header>
       <main>
-        <div className="cardContainer flex flex-wrap ">
+        <div className="cardContainer flex flex-wrap gap-6 justify-center p-6">
           {books
             .filter((book) => book.title.toLowerCase().includes(searchTitle.toLowerCase()))
             .filter((book) => book.author.toLowerCase().includes(searchAuthor.toLowerCase()))

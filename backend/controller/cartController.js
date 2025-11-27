@@ -2,17 +2,30 @@ const db = require("../config/db");
 const jwt = require("jsonwebtoken");
 require("dotenv").config();
 const { JWT_KEY } = process.env;
+const safe = require("../utils/safe");
 
+// replace resolveUserId with numeric/coerced version
 const resolveUserId = (req) => {
-  // explicit places first
-  if (req.body?.userId) return req.body.userId;
-  if (req.body?.user_id) return req.body.user_id;
-  if (req.params?.user_id) return req.params.user_id;
-  if (req.query?.userId) return req.query.userId;
-  if (req.query?.user_id) return req.query.user_id;
-  if (req.user && req.user.userId) return req.user.userId;
+  // prefer explicit values
+  const cand =
+    req.body?.userId ??
+    req.body?.user_id ??
+    req.params?.user_id ??
+    req.query?.userId ??
+    req.query?.user_id;
 
-  // try Authorization: Bearer <token>
+  if (cand !== undefined && cand !== null) {
+    const n = safe.toPositiveInt(cand);
+    if (n) return n;
+  }
+
+  // populated by auth middleware
+  if (req.user && (req.user.userId || req.user.id)) {
+    const n = safe.toPositiveInt(req.user.userId || req.user.id);
+    if (n) return n;
+  }
+
+  // fallback: try to decode Bearer token
   const authHeader = req.headers?.authorization || req.headers?.Authorization;
   if (authHeader && typeof authHeader === "string") {
     const parts = authHeader.split(" ");
@@ -21,10 +34,9 @@ const resolveUserId = (req) => {
       try {
         const decoded = JWT_KEY ? jwt.verify(token, JWT_KEY) : jwt.decode(token);
         if (!decoded) return null;
-        // accept several common claim names
-        return decoded.userId || decoded.user_id || decoded.id || decoded.sub || null;
+        const cand2 = decoded.userId || decoded.user_id || decoded.id || decoded.sub || null;
+        return safe.toPositiveInt(cand2);
       } catch (err) {
-        // invalid token -> no user
         return null;
       }
     }
@@ -36,12 +48,11 @@ const resolveUserId = (req) => {
 //!ADD TO CART
 exports.addToCart = async (req, res) => {
   const userId = resolveUserId(req);
-  const bookId = req.body.bookId || req.body.book_id;
-  if (!userId) return res.status(400).json({ success: false, message: "Missing userId 1" });
+  const bookId = safe.toPositiveInt(req.body.bookId || req.body.book_id);
+  if (!userId) return res.status(400).json({ success: false, message: "Missing userId" });
   if (!bookId) return res.status(400).json({ success: false, message: "Missing bookId" });
 
   try {
-   
     const [bookRows] = await db.query("SELECT * FROM books WHERE bookId = ?", [bookId]);
     if (bookRows.length === 0) {
       return res.status(404).json({ success: false, message: `Book with id ${bookId} not found` });
@@ -98,17 +109,20 @@ exports.getCartItem = async (req, res) => {
 //!EDIT CART
 exports.updateCart = async (req, res) => {
   const { user_id, book_id, quantity } = req.body;
-  const userId = user_id || resolveUserId(req);
-  if (!userId || !book_id || quantity === undefined) {
+  const userId = safe.toPositiveInt(user_id) || resolveUserId(req);
+  const bookId = safe.toPositiveInt(book_id);
+  const qty = Number(quantity);
+
+  if (!userId || !bookId || !Number.isFinite(qty) || qty < 1) {
     return res.status(400).json({
       success: false,
-      message: "Missing user_id, book_id, or quantity",
+      message: "Missing/invalid user_id, book_id, or quantity",
     });
   }
 
   const sql = `UPDATE cart SET quantity = ? WHERE user_id =? AND book_id =?`;
   try {
-    await db.query(sql, [quantity, userId, book_id]);
+    await db.query(sql, [qty, userId, bookId]);
     return res.status(200).json({ success: true, message: "Cart updated successfully" });
   } catch (error) {
     return res.status(500).json({ success: false, error });
@@ -117,8 +131,8 @@ exports.updateCart = async (req, res) => {
 
 //!DELETE CART
 exports.deleteCart = async (req, res) => {
-  const user_id = req.params.user_id || req.body.userId;
-  const book_id = req.params.book_id || req.body.bookId;
+  const user_id = safe.toPositiveInt(req.params.user_id || req.body.userId);
+  const book_id = safe.toPositiveInt(req.params.book_id || req.body.bookId);
   if (!user_id || !book_id) {
     return res.status(400).json({ success: false, message: "Missing user_id or book_id" });
   }

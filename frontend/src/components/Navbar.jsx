@@ -1,10 +1,11 @@
 import React, { useEffect, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import axios from "axios";
 import { useAuth } from "../context/AuthContext";
 
 const Navbar = () => {
   const auth = useAuth();
+  const navigate = useNavigate();
   const user = auth?.user || null;
   const token = user?.token || JSON.parse(localStorage.getItem("user"))?.token;
   const userIdStored = user?.userId || JSON.parse(localStorage.getItem("user"))?.userId;
@@ -48,6 +49,12 @@ const Navbar = () => {
     };
   }, [token, userIdStored]);
 
+  const handleSignOut = () => {
+    auth?.logout?.();
+    try { window.dispatchEvent(new Event("cartUpdated")); } catch (e) {}
+    navigate("/login");
+  };
+
   return (
     <header className="bg-gradient-to-r from-yellow-50 to-beige-50 border-b">
       <div className="container mx-auto px-4 py-3 flex items-center justify-between">
@@ -59,25 +66,45 @@ const Navbar = () => {
         </Link>
 
         <nav className="hidden md:flex items-center gap-6">
-          <Link to="/dashboard" className="text-sm text-gray-700 hover:text-red-600 transition">
-            Dashboard
-          </Link>
+          
           <Link to="/home" className="text-sm text-gray-700 hover:text-red-600 transition">
             Browse
           </Link>
+          {auth?.isAuthenticated && (
+            <Link to="/orders" className="text-sm text-gray-700 hover:text-red-600 transition">
+              Orders
+            </Link>
+          )}
         </nav>
 
         <div className="flex items-center gap-3">
-          <div className="hidden md:flex items-center gap-3">
-            <Link to="/cart" className="relative inline-flex items-center gap-2 bg-red-600 text-white px-3 py-2 rounded-md shadow hover:bg-red-700">
-              🛒 Cart
-              {cartCount > 0 && (
-                <span className="absolute -top-2 -right-2 inline-flex items-center justify-center w-5 h-5 text-xs rounded-full bg-white text-red-700 font-semibold">
-                  {cartCount}
-                </span>
-              )}
-            </Link>
-          </div>
+          {auth?.user ? (
+            <div className="hidden md:flex items-center gap-3">
+              <span className="text-sm text-gray-700">
+                Hi, <strong>{auth.user.username}</strong>
+              </span>
+              <Link to="/cart" className="inline-flex items-center  bg-red-600 text-white p-2 rounded-md shadow relative">
+            🛒
+            {cartCount > 0 && (
+              <span className="absolute -top-2 -right-2 inline-flex items-center justify-center w-5 h-5 text-xs rounded-full bg-white text-red-700 font-semibold">
+                {cartCount}
+              </span>
+            )}
+          </Link>
+              <button
+                onClick={handleSignOut}
+                className="px-3 py-1 rounded-md bg-gray-100 border text-sm hover:bg-gray-200"
+              >
+                Sign out
+              </button>
+            </div>
+          ) : (
+            <div className="hidden md:flex items-center gap-3">
+              <Link to="/login" className="px-3 py-1 rounded-md bg-white border text-sm">
+                Sign in
+              </Link>
+            </div>
+          )}
 
           {/* mobile quick cart button */}
           <Link to="/cart" className="inline-flex items-center sm:hidden bg-red-600 text-white p-2 rounded-md shadow relative">
